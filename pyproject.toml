@@ -152,12 +152,19 @@ observability = [
     "langfuse>=3.8.1",
 ]
 
+mcp = [
+    # Model Context Protocol dependencies
+    "mcp>=1.0.0",
+]
+
 [project.scripts]
 lightrag-server = "lightrag.api.lightrag_server:main"
 lightrag-gunicorn = "lightrag.api.run_with_gunicorn:main"
 lightrag-hash-password = "lightrag.tools.hash_password:main"
 lightrag-download-cache = "lightrag.tools.download_cache:main"
 lightrag-clean-llmqc = "lightrag.tools.clean_llm_query_cache:main"
+lightrag-cli = "lightrag.cli:main"
+lightrag-mcp = "mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/HKUDS/LightRAG"
@@ -166,7 +173,7 @@ Repository = "https://github.com/HKUDS/LightRAG"
 "Bug Tracker" = "https://github.com/HKUDS/LightRAG/issues"
 
 [tool.setuptools.packages.find]
-include = ["lightrag*"]
+include = ["lightrag*", "mcp*"]
 exclude = ["data*", "tests*", "scripts*", "examples*", "dickens*", "reproduce*", "output_complete*", "rag_storage*", "inputs*"]
 
 [tool.setuptools]
