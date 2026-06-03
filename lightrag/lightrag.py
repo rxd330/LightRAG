@@ -4190,6 +4190,30 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
             )
         )
 
+    async def afind_duplicate_entity_groups(self) -> list[dict[str, Any]]:
+        """Discover groups of near-duplicate entity names in the knowledge graph.
+
+        Scans all entities and groups them by canonical normalized form
+        (case-insensitive, punctuation-stripped).  Any group with two or
+        more members is a candidate for merging.
+
+        Returns:
+            List of duplicate groups, each containing a canonical_form,
+            the members (with entity metadata), and group size.
+            Sorted by group size descending.
+
+        Use the result with amerge_entities() to consolidate duplicates.
+        """
+        from lightrag.utils_graph import find_duplicate_entity_groups
+
+        return await find_duplicate_entity_groups(
+            self.chunk_entity_relation_graph,
+        )
+
+    def find_duplicate_entity_groups(self) -> list[dict[str, Any]]:
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(self.afind_duplicate_entity_groups())
+
     async def aexport_data(
         self,
         output_path: str,

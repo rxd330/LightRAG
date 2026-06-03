@@ -1772,3 +1772,70 @@ async def get_relation_info(
         result["vector_data"] = vector_data
 
     return result
+
+
+async def find_duplicate_entity_groups(
+    chunk_entity_relation_graph,
+) -> list[dict[str, Any]]:
+    """Discover groups of entity names that appear to be duplicates.
+
+    Groups entities by their canonical normalized form (case-insensitive,
+    punctuation-stripped).  Any group with two or more members is a candidate
+    for merging.
+
+    Args:
+        chunk_entity_relation_graph: Graph storage instance
+
+    Returns:
+        List of groups, each a dict with:
+          - canonical_form: the normalized name shared by all members
+          - members: list of {entity_name, entity_type, source_count}
+          - size: number of members in the group
+        Sorted by size descending (worst offenders first).
+    """
+    from .utils import normalize_entity_name_for_dedup
+
+    # Get all nodes from the graph
+    all_nodes = await chunk_entity_relation_graph.get_all_nodes()
+
+    # Group by canonical normalized form
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for node in all_nodes:
+        entity_name = node.get("id") or node.get("entity_id") or ""
+        if not entity_name:
+            continue
+
+        canonical = normalize_entity_name_for_dedup(entity_name)
+        if not canonical:
+            continue
+
+        # Count source_ids (chunks contributing to this entity)
+        source_id = node.get("source_id", "") or ""
+        source_count = len([s for s in source_id.split(GRAPH_FIELD_SEP) if s])
+
+        if canonical not in groups:
+            groups[canonical] = []
+        groups[canonical].append(
+            {
+                "entity_name": entity_name,
+                "entity_type": node.get("entity_type", "UNKNOWN"),
+                "source_count": source_count,
+            }
+        )
+
+    # Filter to groups with 2+ members (actual duplicates)
+    result = []
+    for canonical, members in groups.items():
+        if len(members) >= 2:
+            result.append(
+                {
+                    "canonical_form": canonical,
+                    "members": members,
+                    "size": len(members),
+                }
+            )
+
+    # Sort by group size descending (biggest duplication first)
+    result.sort(key=lambda g: g["size"], reverse=True)
+
+    return result
