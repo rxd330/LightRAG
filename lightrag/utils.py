@@ -13,6 +13,7 @@ import logging.handlers
 import os
 import re
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -2303,6 +2304,47 @@ def sanitize_text_for_encoding(text: str, replacement_char: str = "") -> str:
     text = _CONTROL_CHAR_PATTERN_ALL.sub(replacement_char, text)
 
     return text.strip()
+
+
+# Precompile regex for entity-dedup normalization (module-level, compiled once)
+_DEDUP_PUNCT_PATTERN = re.compile(r"[^a-z0-9\s]")
+
+
+def normalize_entity_name_for_dedup(entity_name: str) -> str:
+    """Normalize entity name for duplicate detection.
+
+    Produces a canonical form by:
+    - Unicode NFKD normalization (handles fullwidth/halfwidth, accented chars)
+    - Lowercasing
+    - Stripping all punctuation and symbols, leaving only alphanumerics and spaces
+    - Collapsing multiple whitespace to single space
+
+    This is intentionally more aggressive than sanitize_and_normalize_extracted_text —
+    it is for *comparison* only, not for display. Two entity names that produce the
+    same canonical form are likely duplicates.
+
+    Args:
+        entity_name: Raw entity name string
+
+    Returns:
+        Normalized canonical string, or empty string if nothing remains
+    """
+    if not entity_name:
+        return ""
+
+    # 1. Unicode NFKD normalization: decomposes fullwidth chars, accented chars, etc.
+    normalized = unicodedata.normalize("NFKD", entity_name)
+
+    # 2. Lowercase
+    normalized = normalized.lower()
+
+    # 3. Strip all punctuation and symbols — replace with space
+    normalized = _DEDUP_PUNCT_PATTERN.sub(" ", normalized)
+
+    # 4. Collapse multiple whitespace to single space, then strip
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    return normalized
 
 
 def check_storage_env_vars(storage_name: str) -> None:

@@ -41,6 +41,14 @@ class EntityMergeRequest(BaseModel):
     )
 
 
+class DedupBatchMergeRequest(BaseModel):
+    merge_groups: list[EntityMergeRequest] = Field(
+        ...,
+        description="List of merge operations to perform in batch",
+        min_length=1,
+    )
+
+
 class EntityCreateRequest(BaseModel):
     entity_name: str = Field(
         ...,
@@ -684,5 +692,157 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
             raise HTTPException(
                 status_code=500, detail=f"Error merging entities: {str(e)}"
             )
+
+    @router.get("/graph/entities/duplicates", dependencies=[Depends(combined_auth)])
+    async def find_duplicate_entities():
+        """Discover groups of near-duplicate entity names.
+
+        Scans all entities in the knowledge graph and groups them by a
+        canonical normalized form (case-insensitive, punctuation-stripped).
+        Any group with two or more members is a candidate for merging.
+
+        Response Schema:
+            {
+                "status": "success",
+                "message": "Found 5 duplicate groups across 18 entities",
+                "data": {
+                    "total_duplicate_groups": 5,
+                    "total_entities_affected": 18,
+                    "groups": [
+                        {
+                            "canonical_form": "machine learning",
+                            "size": 3,
+                            "members": [
+                                {"entity_name": "Machine Learning", "entity_type": "TOPIC", "source_count": 12},
+                                {"entity_name": "machine-learning", "entity_type": "FIELD", "source_count": 3},
+                                {"entity_name": "MACHINE_LEARNING", "entity_type": "TOPIC", "source_count": 1}
+                            ]
+                        },
+                        ...
+                    ]
+                }
+            }
+
+        Use the returned groups with /graph/entities/merge or
+        /graph/entities/dedup-merge to consolidate duplicates.
+        """
+        try:
+            groups = await rag.afind_duplicate_entity_groups()
+
+            total_entities = sum(g["size"] for g in groups)
+            return {
+                "status": "success",
+                "message": (
+                    f"Found {len(groups)} duplicate groups across {total_entities} entities"
+                    if groups
+                    else "No duplicate entities found"
+                ),
+                "data": {
+                    "total_duplicate_groups": len(groups),
+                    "total_entities_affected": total_entities,
+                    "groups": groups,
+                },
+            }
+        except Exception as e:
+            logger.error(f"Error finding duplicate entities: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(
+                status_code=500, detail=f"Error finding duplicate entities: {str(e)}"
+            )
+
+    @router.post(
+        "/graph/entities/dedup-merge", dependencies=[Depends(combined_auth)]
+    )
+    async def dedup_batch_merge(request: DedupBatchMergeRequest):
+        """Batch-merge multiple groups of duplicate entities.
+
+        Accepts a list of merge operations and executes them sequentially.
+        Each merge operation consolidates entities_to_change into entity_to_change_into.
+
+        This is a convenience endpoint for applying the results of
+        GET /graph/entities/duplicates in one call.
+
+        Request Body:
+            {
+                "merge_groups": [
+                    {
+                        "entities_to_change": ["machine-learning", "MACHINE_LEARNING"],
+                        "entity_to_change_into": "Machine Learning"
+                    },
+                    ...
+                ]
+            }
+
+        Response Schema:
+            {
+                "status": "success",
+                "message": "Merged 3 of 3 groups successfully",
+                "data": {
+                    "total_groups": 3,
+                    "succeeded": 3,
+                    "failed": 0,
+                    "results": [
+                        {
+                            "group": {"entities_to_change": [...], "entity_to_change_into": "..."},
+                            "status": "success",
+                            "data": {...}
+                        },
+                        ...
+                    ]
+                }
+            }
+        """
+        results = []
+        succeeded = 0
+        failed = 0
+
+        for merge_op in request.merge_groups:
+            try:
+                result = await rag.amerge_entities(
+                    source_entities=merge_op.entities_to_change,
+                    target_entity=merge_op.entity_to_change_into,
+                )
+                results.append(
+                    {
+                        "group": {
+                            "entities_to_change": merge_op.entities_to_change,
+                            "entity_to_change_into": merge_op.entity_to_change_into,
+                        },
+                        "status": "success",
+                        "data": result,
+                    }
+                )
+                succeeded += 1
+            except Exception as e:
+                logger.error(
+                    f"Batch merge failed for group '{merge_op.entity_to_change_into}': {str(e)}"
+                )
+                results.append(
+                    {
+                        "group": {
+                            "entities_to_change": merge_op.entities_to_change,
+                            "entity_to_change_into": merge_op.entity_to_change_into,
+                        },
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
+                failed += 1
+
+        overall_message = (
+            f"Merged {succeeded} of {len(request.merge_groups)} groups successfully"
+            if succeeded == len(request.merge_groups)
+            else f"Merged {succeeded} groups, {failed} failed"
+        )
+        return {
+            "status": "success" if failed == 0 else "partial_success",
+            "message": overall_message,
+            "data": {
+                "total_groups": len(request.merge_groups),
+                "succeeded": succeeded,
+                "failed": failed,
+                "results": results,
+            },
+        }
 
     return router
